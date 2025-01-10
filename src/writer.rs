@@ -91,6 +91,7 @@ pub struct MultipartStream<T> {
     boundary: String,
     stream: T,
     sub_type: &'static str,
+    headers: HeaderMap<'static>
 }
 
 impl<T> MultipartStream<T> {
@@ -101,6 +102,7 @@ impl<T> MultipartStream<T> {
             boundary: boundary.into(),
             stream,
             sub_type: "mixed",
+            headers: HeaderMap::new()
         }
     }
 
@@ -120,6 +122,7 @@ impl<T> MultipartStream<T> {
                 .collect(),
             stream,
             sub_type: "mixed",
+            headers: HeaderMap::new()
         }
     }
 
@@ -128,19 +131,37 @@ impl<T> MultipartStream<T> {
         self.sub_type = sub_type;
         self
     }
+
+    /// Adds a header to the initial response, if already exist will be combined
+    pub fn add_header(mut self, header: impl Into<Header<'static>>) -> Self {
+        self.headers.add(header);
+        self
+    }
+
+    /// Removes a header that was originally added to the initial response
+    pub fn remove_header(mut self, header_name: &str) -> Self {
+        self.headers.remove(header_name);
+        self
+    }
 }
 
 impl<'r, 'o: 'r, T: Stream<Item = MultipartSection<'o>> + Send + 'o> Responder<'r, 'o>
     for MultipartStream<T>
 {
     fn respond_to(self, _r: &'r Request<'_>) -> Result<'o> {
-        Response::build()
+        let mut binding = Response::build();
+        let builder = binding
             .status(Status::Ok)
             .header(
                 ContentType::new("multipart", self.sub_type)
                     .with_params(("boundary", self.boundary.clone())),
-            )
-            .streamed_body(MultipartStreamInner(
+            );
+
+        for header in self.headers.into_iter() {
+            builder.header(header);
+        }
+
+        builder.streamed_body(MultipartStreamInner(
                 self.boundary,
                 self.stream,
                 StreamState::Waiting,
